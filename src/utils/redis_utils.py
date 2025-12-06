@@ -272,3 +272,99 @@ def unmark_chat_as_processing(chat_id: str) -> bool:
     except Exception as e:
         print(f"[ERROR] Error en unmark_chat_as_processing: {e}")
         return False
+
+
+def has_pending_messages(chat_id: str) -> bool:
+    """
+    Verifica si hay mensajes pendientes en el buffer de Redis.
+
+    Args:
+        chat_id: Identificador único del chat
+
+    Returns:
+        True si hay mensajes pendientes, False en caso contrario
+    """
+    try:
+        client = get_redis_client()
+        if not client:
+            return False
+
+        key = f"{REDIS_KEY_PREFIX}{chat_id}"
+        return client.exists(key) > 0
+    except Exception as e:
+        print(f"[ERROR] Error en has_pending_messages: {e}")
+        return False
+
+
+def mark_needs_reprocessing(chat_id: str) -> bool:
+    """
+    Marca un chat como que necesita reprocesamiento porque hay mensajes pendientes.
+    Este flag se usa cuando se liberó el lock pero quedaron mensajes en el buffer.
+
+    Args:
+        chat_id: Identificador único del chat
+
+    Returns:
+        True si se marcó exitosamente
+    """
+    try:
+        client = get_redis_client()
+        if not client:
+            return False
+
+        key = f"whatsapp_reprocess:{chat_id}"
+        # Marcar con TTL de 60 segundos
+        client.setex(key, 60, "1")
+        print(f"🔄 Chat {chat_id} marcado para reprocesamiento")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Error en mark_needs_reprocessing: {e}")
+        return False
+
+
+def needs_reprocessing(chat_id: str) -> bool:
+    """
+    Verifica si un chat está marcado para reprocesamiento.
+
+    Args:
+        chat_id: Identificador único del chat
+
+    Returns:
+        True si necesita reprocesamiento
+    """
+    try:
+        client = get_redis_client()
+        if not client:
+            return False
+
+        key = f"whatsapp_reprocess:{chat_id}"
+        return client.exists(key) > 0
+    except Exception as e:
+        print(f"[ERROR] Error en needs_reprocessing: {e}")
+        return False
+
+
+def clear_reprocessing_flag(chat_id: str) -> bool:
+    """
+    Limpia el flag de reprocesamiento.
+
+    Args:
+        chat_id: Identificador único del chat
+
+    Returns:
+        True si se limpió exitosamente
+    """
+    try:
+        client = get_redis_client()
+        if not client:
+            return False
+
+        key = f"whatsapp_reprocess:{chat_id}"
+        result = client.delete(key)
+        if result > 0:
+            print(f"🗑️ Flag de reprocesamiento eliminado para {chat_id}")
+            return True
+        return False
+    except Exception as e:
+        print(f"[ERROR] Error en clear_reprocessing_flag: {e}")
+        return False

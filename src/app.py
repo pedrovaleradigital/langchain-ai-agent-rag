@@ -27,7 +27,11 @@ from utils.redis_utils import (
     mark_chat_as_processing,
     unmark_chat_as_processing,
     is_chat_being_processed,
-    get_accumulated_messages
+    get_accumulated_messages,
+    has_pending_messages,
+    mark_needs_reprocessing,
+    needs_reprocessing,
+    clear_reprocessing_flag
 )
 
 app = FastAPI(
@@ -38,6 +42,92 @@ app = FastAPI(
 
 
 # ============================================
+# FUNCIÓN PARA HUMANIZAR RESPUESTAS
+# ============================================
+def split_message_humanized(message: str, max_length: int = 500) -> list:
+    """
+    Divide un mensaje largo en fragmentos más pequeños para simular
+    una conversación más humana y natural.
+
+    Estrategia de división:
+    1. Divide por párrafos (doble salto de línea)
+    2. Si un párrafo es muy largo, divide por líneas simples
+    3. Si una línea es muy larga, divide por puntos
+    4. Como último recurso, divide por caracteres respetando palabras
+
+    Args:
+        message: Mensaje completo a dividir
+        max_length: Longitud máxima por fragmento
+
+    Returns:
+        Lista de fragmentos de mensaje
+    """
+    if not message or len(message) <= max_length:
+        return [message] if message else []
+
+    fragments = []
+
+    # 1. Dividir por párrafos (doble salto de línea o \n\n)
+    paragraphs = message.split('\n\n')
+
+    for paragraph in paragraphs:
+        paragraph = paragraph.strip()
+        if not paragraph:
+            continue
+
+        # Si el párrafo cabe en un mensaje, agregarlo completo
+        if len(paragraph) <= max_length:
+            fragments.append(paragraph)
+            continue
+
+        # 2. El párrafo es muy largo, dividir por líneas simples
+        lines = paragraph.split('\n')
+        current_fragment = ""
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # Si agregar esta línea excede el límite, guardar el fragmento actual
+            if current_fragment and len(current_fragment + '\n' + line) > max_length:
+                fragments.append(current_fragment)
+                current_fragment = line
+            else:
+                # Agregar línea al fragmento actual
+                if current_fragment:
+                    current_fragment += '\n' + line
+                else:
+                    current_fragment = line
+
+            # Si la línea sola es muy larga, dividirla por puntos
+            if len(current_fragment) > max_length:
+                sentences = current_fragment.split('. ')
+                temp_fragment = ""
+
+                for sentence in sentences:
+                    if temp_fragment and len(temp_fragment + '. ' + sentence) > max_length:
+                        fragments.append(temp_fragment.strip())
+                        temp_fragment = sentence
+                    else:
+                        if temp_fragment:
+                            temp_fragment += '. ' + sentence
+                        else:
+                            temp_fragment = sentence
+
+                current_fragment = temp_fragment
+
+        # Agregar el último fragmento del párrafo
+        if current_fragment:
+            fragments.append(current_fragment)
+
+    # Filtrar fragmentos vacíos
+    fragments = [f.strip() for f in fragments if f.strip()]
+
+    return fragments if fragments else [message]
+
+
+# ============================================
 # BACKGROUND TASK - PROCESAR MENSAJES ACUMULADOS
 # ============================================
 async def process_accumulated_messages_task(
@@ -45,7 +135,8 @@ async def process_accumulated_messages_task(
     conversation_id: int,
     sender_name: str,
     sender_phone: str,
-    wait_seconds: int = 10
+    wait_seconds: int = 10,
+    background_tasks_ref: BackgroundTasks = None
 ):
     """
     Background task que espera N segundos y luego procesa los mensajes acumulados.
@@ -57,6 +148,7 @@ async def process_accumulated_messages_task(
         sender_name: Nombre del usuario
         sender_phone: Número de teléfono del usuario
         wait_seconds: Segundos a esperar antes de procesar
+        background_tasks_ref: Referencia a BackgroundTasks para auto-relanzamiento
     """
     try:
         print(f"⏰ [Background Task] Iniciado para chat {chat_id}. Esperando {wait_seconds}s...")
@@ -103,27 +195,101 @@ async def process_accumulated_messages_task(
             traceback.print_exc()
             response_message = f"Ocurrió un error al procesar tu mensaje: {str(e)}"
 
-        # Guardar respuesta del bot en Supabase
+        # Guardar respuesta completa del bot en Supabase
         store_chat_history(chat_id, "bot", response_message)
 
-        # Enviar respuesta a Chatwoot
-        chatwoot = Chatwoot()
-        chatwoot.send_message(
-            conversation_id=conversation_id,
-            message=response_message,
-            message_type='outgoing'
-        )
-        print(f"✅ [Background Task] Respuesta enviada a Chatwoot (conversación {conversation_id})")
+        # ============================================
+        # HUMANIZAR RESPUESTA - DIVIDIR Y ENVIAR EN MÚLTIPLES MENSAJES
+        # ============================================
+        print("✂️ [Background Task] Dividiendo respuesta en fragmentos humanizados...")
+        message_fragments = split_message_humanized(response_message, max_length=500)
+        print(f"📊 Total de fragmentos a enviar: {len(message_fragments)}")
 
-        # Limpiar buffer de Redis
-        clear_accumulated_messages(chat_id)
-        print(f"🗑️ [Background Task] Buffer Redis limpiado para {chat_id}")
+        # ============================================
+        # IMPORTANTE: Extender el lock si hay muchos fragmentos
+        # ============================================
+        # Calcular tiempo total estimado de envío
+        total_delay_time = sum([1 + (len(f) / 100) for f in message_fragments[:-1]])
+        total_delay_time = min(total_delay_time, 3 * (len(message_fragments) - 1))
+
+        # Extender el TTL del lock para cubrir todo el proceso de envío
+        # TTL = tiempo de delays + margen de seguridad de 10 segundos
+        extended_ttl = int(total_delay_time + 10)
+
+        print(f"🔒 [Background Task] Extendiendo lock por {extended_ttl}s para enviar {len(message_fragments)} mensajes...")
+        mark_chat_as_processing(chat_id, ttl=extended_ttl)
+
+        # Enviar cada fragmento con delay para simular escritura humana
+        chatwoot = Chatwoot()
+
+        for i, fragment in enumerate(message_fragments, 1):
+            print(f"📤 [Background Task] Enviando fragmento {i}/{len(message_fragments)}...")
+            print(f"   Contenido: {fragment[:100]}...")
+
+            chatwoot.send_message(
+                conversation_id=conversation_id,
+                message=fragment,
+                message_type='outgoing'
+            )
+
+            # Delay entre mensajes para simular escritura humana
+            # Solo aplicar delay si NO es el último mensaje
+            if i < len(message_fragments):
+                # Calcular delay basado en longitud del fragmento
+                # Base: 1 segundo + tiempo de lectura estimado (50 caracteres por segundo)
+                delay = 1 + (len(fragment) / 100)
+                # Máximo 3 segundos, mínimo 1 segundo
+                delay = max(1, min(3, delay))
+
+                print(f"   ⏳ Esperando {delay:.1f}s antes del siguiente mensaje...")
+                await asyncio.sleep(delay)
+
+        print(f"✅ [Background Task] {len(message_fragments)} fragmentos enviados a Chatwoot")
 
     except Exception as e:
         print(f"❌ [Background Task] Error crítico: {e}")
         import traceback
         traceback.print_exc()
     finally:
+        # ============================================
+        # VERIFICAR SI HAY MENSAJES PENDIENTES (HUÉRFANOS)
+        # ============================================
+        # IMPORTANTE: Verificar ANTES de limpiar el buffer
+        if has_pending_messages(chat_id):
+            print(f"⚡ [Background Task] ¡MENSAJES PENDIENTES DETECTADOS!")
+            print(f"   Hay mensajes que llegaron mientras se enviaban las respuestas.")
+
+            # Si tenemos acceso a background_tasks, relanzar inmediatamente
+            if background_tasks_ref is not None:
+                print(f"   🔄 AUTO-RELANZANDO procesamiento inmediato...")
+
+                # NO limpiar el buffer - dejar los mensajes para el próximo task
+                # Marcar como en procesamiento nuevamente
+                if mark_chat_as_processing(chat_id, ttl=15):
+                    background_tasks_ref.add_task(
+                        process_accumulated_messages_task,
+                        chat_id=chat_id,
+                        conversation_id=conversation_id,
+                        sender_name=sender_name,
+                        sender_phone=sender_phone,
+                        wait_seconds=0,  # ← INMEDIATO, sin espera
+                        background_tasks_ref=background_tasks_ref
+                    )
+                    print(f"   ✅ Nuevo background task lanzado para mensajes huérfanos")
+                else:
+                    print(f"   ⚠️ No se pudo crear lock para auto-relanzamiento")
+                    # Limpiar buffer ya que no se pudo relanzar
+                    clear_accumulated_messages(chat_id)
+            else:
+                # Fallback: marcar para reprocesamiento manual
+                print(f"   ⚠️ No hay referencia a background_tasks, marcando para reprocesamiento manual...")
+                mark_needs_reprocessing(chat_id)
+                # NO limpiar buffer - dejar para reprocesamiento manual
+        else:
+            # No hay mensajes pendientes, limpiar el buffer normalmente
+            clear_accumulated_messages(chat_id)
+            print(f"🗑️ [Background Task] Buffer Redis limpiado para {chat_id}")
+
         # Siempre desmarcar el chat como procesando
         unmark_chat_as_processing(chat_id)
         print(f"✅ [Background Task] Completado para chat {chat_id}")
@@ -365,6 +531,40 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
         # El mensaje está siendo acumulado
         print(f"⏳ Mensaje acumulado en Redis. Esperando más mensajes (10s)...")
 
+        # ============================================
+        # VERIFICAR SI HAY REPROCESAMIENTO PENDIENTE
+        # ============================================
+        # Si el chat está marcado para reprocesamiento (mensajes huérfanos del ciclo anterior)
+        # Y ya NO está siendo procesado, lanzar inmediatamente sin esperar
+        if needs_reprocessing(chat_id) and not is_chat_being_processed(chat_id):
+            print(f"🔄 [REPROCESAMIENTO] Chat marcado para reprocesamiento automático")
+            print(f"   Procesando mensajes huérfanos inmediatamente (sin espera)...")
+
+            # Limpiar el flag de reprocesamiento
+            clear_reprocessing_flag(chat_id)
+
+            # Marcar como en procesamiento
+            if mark_chat_as_processing(chat_id, ttl=15):
+                # Extraer teléfono del usuario
+                phone_number = data.get('conversation', {}).get('meta', {}).get('sender', {}).get('phone_number', '')
+                sender_phone_clean = phone_number.replace('+', '') if phone_number else chat_id
+
+                # Lanzar background task INMEDIATO (wait_seconds=0)
+                background_tasks.add_task(
+                    process_accumulated_messages_task,
+                    chat_id=chat_id,
+                    conversation_id=conversation_id,
+                    sender_name=sender_name,
+                    sender_phone=sender_phone_clean,
+                    wait_seconds=0,  # ← SIN ESPERA para mensajes huérfanos
+                    background_tasks_ref=background_tasks
+                )
+
+                return JSONResponse(
+                    content={'status': 'success', 'message': 'Reprocesamiento iniciado'},
+                    status_code=200
+                )
+
         # Verificar si ya hay un background task procesando este chat
         if is_chat_being_processed(chat_id):
             print(f"⏭️ Ya existe un background task para este chat, no crear otro")
@@ -387,7 +587,8 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
                 conversation_id=conversation_id,
                 sender_name=sender_name,
                 sender_phone=sender_phone_clean,
-                wait_seconds=5
+                wait_seconds=5,
+                background_tasks_ref=background_tasks
             )
 
         return JSONResponse(
