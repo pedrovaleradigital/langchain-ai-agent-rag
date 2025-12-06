@@ -1,0 +1,10 @@
+steps:
+  # Paso 1: Construir la imagen Docker desde Dockerfile.prod
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/repo-project-langchain-chatwoot/image-v3-chatbot:latest', '-f', 'Dockerfile.prod', '.']
+
+  # Paso 2: Subir la imagen a Google Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/repo-project-langchain-chatwoot/image-v3-chatbot:latest']
+
+

@@ -1,0 +1,56 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: chatbot-pedro
+  labels:
+    cloud.googleapis.com/location: us-central1
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/maxScale: '10'
+        autoscaling.knative.dev/minScale: '0'
+    spec:
+      containers:
+      - image: us-central1-docker.pkg.dev/datapath-ai-developer-pvl/repo-project-langchain-chatwoot/image-v3-chatbot:latest
+        ports:
+        - containerPort: 5005
+        env:
+        # ===== OPENAI =====
+        - name: OPENAI_API_KEY
+          value: "YOUR_OPENAI_API_KEY"
+
+        # ===== SUPABASE =====
+        - name: SUPABASE_URL
+          value: "https://your-project.supabase.co"
+        - name: SUPABASE_SERVICE_KEY
+          value: "YOUR_SUPABASE_SERVICE_KEY"
+
+        # ===== CHATWOOT =====
+        - name: CHATWOOT_BASE_URL
+          value: "https://your-chatwoot-instance.com/"
+        - name: CHATWOOT_API_ACCESS_TOKEN
+          value: "YOUR_CHATWOOT_API_TOKEN"
+        - name: CHATWOOT_ACCOUNT_ID
+          value: "1"
+        - name: CHATWOOT_INBOX_ID
+          value: "1"
+
+        # ===== EMAIL (Gmail) =====
+        - name: EMAIL_REMITENTE
+          value: "your-email@gmail.com"
+        - name: APP_PASSWORD_GMAIL
+          value: "YOUR_APP_PASSWORD"
+
+        # ===== GOOGLE SHEETS =====
+        - name: GOOGLE_SHEET_ID
+          value: "YOUR_SHEET_ID"
+        - name: GOOGLE_SHEET_NAME
+          value: "Leads"
+        - name: GOOGLE_SERVICE_ACCOUNT_PATH
+          value: "credentials.json"
+
+        resources:
+          limits:
+            memory: 512Mi
+            cpu: '1'

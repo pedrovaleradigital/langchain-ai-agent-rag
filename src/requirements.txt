@@ -1,0 +1,57 @@
+# ============================================
+# CONFIGURACIÓN Y VARIABLES DE ENTORNO
+# ============================================
+python-dotenv
+python-decouple
+
+# ============================================
+# LANGCHAIN - Versiones compatibles actuales
+# IMPORTANTE: Instalar en este orden
+# ============================================
+langchain-core
+langchain-community
+langchain-text-splitters
+langchain-openai
+langchain
+
+# ============================================
+# OPENAI
+# ============================================
+openai
+
+# ============================================
+# VECTOR DATABASE (Supabase)
+# ============================================
+supabase>=2.3.0
+vecs>=0.4.0
+pypdf
+
+# ============================================
+# WEB FRAMEWORK (FastAPI)
+# ============================================
+fastapi
+uvicorn[standard]
+
+# ============================================
+# HTTP CLIENTS
+# ============================================
+httpx
+requests
+
+# ============================================
+# GOOGLE APIs (Sheets, Calendar, Gmail)
+# ============================================
+pygsheets
+google-auth
+google-auth-oauthlib
+google-api-python-client
+
+# ============================================
+# CACHE Y MENSAJERÍA (Redis)
+# ============================================
+redis>=5.0.0
+
+# ============================================
+# UTILIDADES
+# ============================================
+pytz

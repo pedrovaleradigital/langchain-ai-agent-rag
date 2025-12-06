@@ -1,0 +1,36 @@
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Instalar dependencias del sistema
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    python3-dev \
+    ffmpeg \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Instalar Google Cloud SDK (CLI)
+RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list && \
+    curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key --keyring /usr/share/keyrings/cloud.google.gpg add - && \
+    apt-get update && apt-get install -y google-cloud-cli && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copiar requirements
+COPY requirements.txt .
+
+# Instalar dependencias Python
+RUN python -m pip install --upgrade pip setuptools wheel
+RUN pip install --no-cache-dir -r requirements.txt
+
+# El código se montará como volumen desde VSCode Dev Containers
+# Por eso no copiamos nada aquí
+
+# Puerto de desarrollo
+EXPOSE 5005
+
+# Comando por defecto (puede ser sobreescrito por devcontainer.json)
+CMD ["bash"]

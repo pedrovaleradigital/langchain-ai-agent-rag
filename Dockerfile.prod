@@ -1,0 +1,28 @@
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Instalar herramientas de compilación y dependencias
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    python3-dev \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copiar requirements primero (para aprovechar caché de Docker)
+COPY requirements.txt .
+
+# Actualizar pip e instalar dependencias
+RUN python -m pip install --upgrade pip setuptools wheel
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copiar SOLO la carpeta src (código de la aplicación)
+COPY src/ .
+
+# Exponer el puerto
+EXPOSE 5005
+
+# Comando para producción (SIN --reload)
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "5005"]
